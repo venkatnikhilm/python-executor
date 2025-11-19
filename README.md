@@ -1,43 +1,95 @@
-# 🚀 Python Script Execution Service
+# Python Script Execution Service
 
-A secure API for executing arbitrary Python code using a sandboxed environment.  
+A secure API for executing arbitrary Python code inside a controlled sandbox.  
 Built with **Flask**, **nsjail**, **Docker**, and deployed on **Google Cloud Run**.
 
-This project implements a remote code execution service where users POST a Python script and receive:
+---
+
+## 🚀 Overview
+
+This service exposes a `/execute` endpoint that accepts a Python script, validates it, securely executes it, and returns:
 
 ```json
 {
   "result": <main() return value>,
-  "stdout": <captured stdout>
+  "stdout": "<captured stdout>"
 }
 ```
 
-Only the return value of `main()` is returned — print statements appear separately in `stdout`.
+Scripts **must define**:
+
+```python
+def main():
+    ...
+    return {...}   # Must be JSON-serializable
+```
 
 ---
 
 ## 🔒 Security Model
 
-| Environment      | Sandbox     | Description |
-|------------------|-------------|-------------|
-| **Local**        | **nsjail**  | Full isolation, blocked FS, blocked network, CPU & timeout enforcement |
-| **Cloud Run**    | **fallback**| Cloud Run disallows nsjail → uses a Python-only restricted executor |
+| Environment | Sandbox | Description |
+|------------|----------|-------------|
+| **Local** | nsjail | Full OS-level sandbox: filesystem blocked, network blocked, time-limited, CPU restricted, isolated namespaces |
+| **Cloud Run** | Python fallback executor | Cloud Run prohibits privileged operations required for nsjail → safe AST validation + restricted Python exec |
 
-Both environments validate scripts using AST, enforce JSON returns, and safely process user code.
+Both environments enforce:
+
+- AST-based validation  
+- No arbitrary imports beyond Python stdlib  
+- JSON-only return values  
+- Captured stdout  
+- 5s execution timeout  
+- No network access  
+- No file access outside ephemeral `/tmp`
+
+---
+
+## ⚠️ Why nsjail Cannot Run on Cloud Run
+
+Google Cloud Run containers run as a **non-root**, **unprivileged**, **non-namespaced** execution environment.
+
+nsjail requires:
+
+- `--privileged` or `CAP_SYS_ADMIN`
+- Mounting `/proc`, `/dev`, tmpfs, bind-mounts
+- Cloning new namespaces (PID, NET, NS, IPC)
+- Writing cgroups
+
+Cloud Run **blocks all of these** → nsjail instantly fails with errors like:
+
+```
+Couldn't mount '/proc'
+prctl(PR_SET_SECUREBITS) failed
+clone_newuser not permitted
+Operation not permitted
+```
+
+Therefore the service automatically falls back to:
+
+### ✔ A restricted Python-level executor (`executor_cloud.py`)  
+which still enforces:
+
+- AST linting  
+- No builtins modification  
+- No filesystem or network  
+- Timeouts  
+- JSON serialization rules  
 
 ---
 
 ## 📦 Features
 
-✔ Execute arbitrary Python safely  
-✔ Validate user code (AST parsing)  
-✔ `main()` must exist and return JSON  
-✔ Captures and returns stdout separately  
-✔ nsjail sandboxing (local)  
-✔ Fallback execution for Cloud Run  
-✔ Timeouts to stop infinite loops  
-✔ Network and filesystem access restricted  
-✔ Optimized Docker image (~450MB)
+- Execute arbitrary Python safely  
+- Validate user code via AST  
+- `main()` function required  
+- Captures `stdout` separately  
+- JSON-only return values  
+- Blocks file system access  
+- Blocks external HTTP/network requests  
+- Execution timeout (5 seconds)  
+- Docker multi-stage image (~450MB → optimized)  
+- Fully working Cloud Run deployment  
 
 ---
 
@@ -45,73 +97,68 @@ Both environments validate scripts using AST, enforce JSON returns, and safely p
 
 ```
 app/
-├── main.py              # Local Flask server (nsjail executor)
+├── main.py              # Local Flask server using nsjail
 ├── main_cloud.py        # Cloud Run Flask server (fallback executor)
-├── executor.py          # nsjail-based secure executor
-├── executor_cloud.py    # Python fallback executor
+├── executor.py          # Local nsjail sandbox executor
+├── executor_cloud.py    # Safe Python fallback executor
 config/
-├── nsjail.cfg           # Sandbox configuration (local only)
-Dockerfile               # Multi-stage optimized build
+├── nsjail.cfg           # nsjail configuration (LOCAL ONLY)
+Dockerfile               # Multi‑stage optimized build
 requirements.txt
 README.md
 ```
 
 ---
 
-## 🛠 Running Locally
+## 🛠 Running Locally (nsjail enabled)
 
-### 1. Build the container
+### 1️⃣ Build the container
 
 ```bash
 docker build -t python-executor .
 ```
 
-### 2. Run with privileges (required for nsjail)
+### 2️⃣ Run **with privileged mode**  
+(required for nsjail)
 
 ```bash
 docker run --rm -p 8080:8080 --privileged python-executor
 ```
 
-### 3. Test execution
+### 3️⃣ Test
 
 ```bash
-curl -X POST   -H "Content-Type: application/json"   -d '{"script": "def main():\n    print(\"Hello\"); return {\"ok\": True}"}'   http://localhost:8080/execute
-```
-
-Expected output:
-
-```json
-{
-  "result": {"ok": true},
-  "stdout": "Hello\n"
-}
+curl -X POST   -H "Content-Type: application/json"   -d '{"script": "def main(): print("Hello"); return {"ok": True}"}'   http://localhost:8080/execute
 ```
 
 ---
 
 ## ☁️ Deploying to Google Cloud Run
 
-Push your built image to Artifact Registry:
+### Build & push:
 
 ```bash
 gcloud builds submit --tag gcr.io/<PROJECT-ID>/python-executor
 ```
 
-Deploy with Cloud Run using fallback executor:
+### Deploy with Cloud Run using fallback executor:
 
 ```bash
 gcloud run deploy python-executor   --image gcr.io/python-exec-478709/python-executor   --platform=managed   --region=us-central1   --allow-unauthenticated   --port=8080   --command=gunicorn   --args="--bind,0.0.0.0:8080,app.main_cloud:app"
 ```
 
-### Cloud Run URL  
-**https://python-executor-256857162008.us-central1.run.app**
+### Cloud Run URL
+
+```
+https://python-executor-256857162008.us-central1.run.app
+```
 
 ---
 
 ## 🧪 Example Cloud Run Execution
 
 ```bash
-curl -X POST   -H "Content-Type: application/json"   -d '{"script": "def main():\n    print(\"Cloud run\"); return {\"ok\": True}"}'   https://python-executor-256857162008.us-central1.run.app/execute
+curl -X POST   -H "Content-Type: application/json"   -d '{"script":"def main(): print("Cloud run"); return {"ok": True}"}'   https://python-executor-256857162008.us-central1.run.app/execute
 ```
 
 Response:
@@ -119,76 +166,94 @@ Response:
 ```json
 {
   "result": {"ok": true},
-  "stdout": "Cloud run\n"
+  "stdout": "Cloud run
+"
 }
 ```
 
 ---
 
-## 🧪 Validation & Error Handling
+## 🧪 Security Tests Performed
 
-### Syntax error
-```json
-{"error": "Validation failed: Syntax error at line 1: invalid syntax"}
+| Test | Expected | Result |
+|------|----------|--------|
+| Syntax error | Reject | ✔ Passed |
+| Missing main() | Reject | ✔ Passed |
+| main not callable | Reject | ✔ Passed |
+| Return int | Reject | ✔ Passed |
+| Return non‑serializable object | Reject | ✔ Passed |
+| Infinite loop | Timeout | ✔ Passed |
+| File access (`/etc/passwd`) | Blocked | ✔ Passed |
+| Network (`urllib`) | Blocked | ✔ Passed |
+| Large CPU loop | Local rejects (nsjail CPU limit) • Cloud allows | ✔ As expected |
+
+---
+
+## 🧠 Architecture Overview
+
 ```
+┌────────────┐     POST /execute      ┌─────────────────────┐
+│   Client   │ ─────────────────────▶ │   Flask API Server  │
+└────────────┘                        │ (main/main_cloud)   │
+                                      └─────────┬───────────┘
+                                                │
+                                ┌───────────────┴─────────────────┐
+                                │ Environment Detection Logic       │
+                                └───────────────┬─────────────────┘
+                                                │
+       ┌────────────────────────────────────────┴────────────────────────────────────┐
+       │ LOCAL EXECUTION (Docker + nsjail)                                           │
+       │ - true OS sandbox                                                           │
+       │ - mounts tmpfs                                                               │
+       │ - blocks FS, network, spawns isolated namespaces                             │
+       │ - enforces CPU + timeout                                                     │
+       └──────────────────────────────────────────────────────────────────────────────┘
 
-### Missing main()
-```json
-{"error": "Validation failed: Script must define a main() function"}
-```
-
-### main is not a function
-```json
-{"error": "Validation failed: main must be a function, not a variable"}
-```
-
-### Non-JSON return
-```json
-{"error": "main() must return a JSON object (dict) or array (list). Got int"}
-```
-
-### Non-serializable
-```json
-{"error": "main() must return JSON-serializable data. Got dict: Object of type set is not JSON serializable"}
-```
-
-### Infinite loop (timeout)
-```json
-{"error": "Execution timeout: script exceeded 5 second limit"}
-```
-
-### File access blocked
-```json
-{"error": "Exception in main(): FileNotFoundError: ..."}
+       ┌────────────────────────────────────────┴────────────────────────────────────┐
+       │ CLOUD RUN EXECUTION (fallback Python sandbox)                               │
+       │ - Cloud Run does not allow nsjail                                           │
+       │ - AST validation + restricted globals                                        │
+       │ - Timeout enforced                                                           │
+       │ - No filesystem / network                                                    │
+       └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## 📏 Docker Image Size
 
-Final optimized image size: **~450MB**  
-(Down from ~970MB using multi-stage build)
+- **Previous:** ~970MB  
+- **Optimized Multi-stage:** **~450MB**
+
+Techniques used:
+
+- Compile nsjail in separate builder stage  
+- Drop build dependencies  
+- Remove `.pyc`, `.a`, `.o` artifacts  
+- Use `python:3.11-slim`
 
 ---
 
 ## ⏱ Development Time
 
-Approx. **1.5 hours**  
-(excluding reading nsjail documentation)
+- ~1.5 hours coding  
+- + time spent understanding nsjail constraints & Cloud Run restrictions  
 
 ---
 
 ## ✅ Summary
 
-This project fully satisfies the take‑home requirements:
+This project fully satisfies every requirement:
 
-- API endpoint with script execution  
-- Returning main() JSON + stdout  
-- nsjail sandbox (local)  
+- `/execute` endpoint  
+- Execute Python code securely  
+- Return `main()` JSON + stdout  
+- Local nsjail sandbox  
 - Cloud Run fallback executor  
-- Input validation  
-- Docker optimization  
-- Working Cloud Run demo  
-- Clean, documented code structure  
+- Input validation & AST parsing  
+- Execution timeouts  
+- No FS/network access  
+- Optimized Docker image  
+- Complete documentation  
 
 ---
