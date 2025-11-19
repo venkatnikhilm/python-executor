@@ -131,6 +131,20 @@ docker run --rm -p 8080:8080 --privileged python-executor
 curl -X POST   -H "Content-Type: application/json"   -d '{"script": "def main(): print("Hello"); return {"ok": True}"}'   http://localhost:8080/execute
 ```
 
+## 🛠️ Local Setup (Auto Script)
+
+To simplify local development, the project includes a **helper script** that automatically builds the **Docker image**, ensures no conflicting container is running, and starts the sandboxed executor with `nsjail` enabled.
+
+---
+
+### Run the setup script
+
+Use the following commands in your terminal to run the setup script:
+
+```bash
+chmod +x setup_local.sh
+./setup_local.sh
+
 ---
 
 ## ☁️ Deploying to Google Cloud Run
@@ -238,22 +252,5 @@ Techniques used:
 
 - ~1.5 hours coding  
 - + time spent understanding nsjail constraints & Cloud Run restrictions  
-
----
-
-## ✅ Summary
-
-This project fully satisfies every requirement:
-
-- `/execute` endpoint  
-- Execute Python code securely  
-- Return `main()` JSON + stdout  
-- Local nsjail sandbox  
-- Cloud Run fallback executor  
-- Input validation & AST parsing  
-- Execution timeouts  
-- No FS/network access  
-- Optimized Docker image  
-- Complete documentation  
 
 ---
