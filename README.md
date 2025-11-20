@@ -234,7 +234,7 @@ Response:
 ## 📏 Docker Image Size
 
 - **Previous:** ~970MB  
-- **Optimized Multi-stage:** **~450MB**
+- **Optimized Multi-stage:** **~370MB**
 
 Techniques used:
 
