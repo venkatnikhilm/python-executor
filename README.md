@@ -211,9 +211,6 @@ Response:
 └────────────┘                        │ (main/main_cloud)   │
                                       └─────────┬───────────┘
                                                 │
-                                ┌───────────────┴─────────────────┐
-                                │ Environment Detection Logic       │
-                                └───────────────┬─────────────────┘
                                                 │
        ┌────────────────────────────────────────┴────────────────────────────────────┐
        │ LOCAL EXECUTION (Docker + nsjail)                                           │
@@ -222,7 +219,7 @@ Response:
        │ - blocks FS, network, spawns isolated namespaces                             │
        │ - enforces CPU + timeout                                                     │
        └──────────────────────────────────────────────────────────────────────────────┘
-
+                                                │
        ┌────────────────────────────────────────┴────────────────────────────────────┐
        │ CLOUD RUN EXECUTION (fallback Python sandbox)                               │
        │ - Cloud Run does not allow nsjail                                           │
